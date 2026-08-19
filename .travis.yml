@@ -2,11 +2,14 @@ version: ~> 1.0
 language: node_js
 os:
  - linux
-import:
- - ljharb/travis-ci:node/all.yml
- - ljharb/travis-ci:node/pretest.yml
- - ljharb/travis-ci:node/posttest.yml
- - ljharb/travis-ci:node/coverage.yml
-matrix:
-  allow_failures:
-    - env: COVERAGE=true # temporarily allow this to fail
+node_js:
+ - "14"
+ - "12"
+ - "10"
+install:
+ - travis_wait 30 npm install --no-audit --ignore-scripts
+before_script:
+ - rm -f travis_wait_*.log
+script:
+ - npm run pretest
+ - npm run tests-only

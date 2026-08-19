@@ -112,11 +112,11 @@ test('parse()', function (t) {
         st.deepEqual(qs.parse('a=b&a[0]=c'), { a: ['b', 'c'] });
 
         st.deepEqual(qs.parse('a[1]=b&a=c', { arrayLimit: 20 }), { a: ['b', 'c'] });
-        st.deepEqual(qs.parse('a[]=b&a=c', { arrayLimit: 0 }), { a: ['b', 'c'] });
+        st.deepEqual(qs.parse('a[]=b&a=c', { arrayLimit: 0 }), { a: { 0: 'b', 1: 'c' } });
         st.deepEqual(qs.parse('a[]=b&a=c'), { a: ['b', 'c'] });
 
         st.deepEqual(qs.parse('a=b&a[1]=c', { arrayLimit: 20 }), { a: ['b', 'c'] });
-        st.deepEqual(qs.parse('a=b&a[]=c', { arrayLimit: 0 }), { a: ['b', 'c'] });
+        st.deepEqual(qs.parse('a=b&a[]=c', { arrayLimit: 0 }), { a: { 0: 'b', 1: 'c' } });
         st.deepEqual(qs.parse('a=b&a[]=c'), { a: ['b', 'c'] });
 
         st.end();
@@ -238,7 +238,7 @@ test('parse()', function (t) {
         );
         st.deepEqual(
             qs.parse('a[]=b&a[]&a[]=c&a[]=', { strictNullHandling: true, arrayLimit: 0 }),
-            { a: ['b', null, 'c', ''] },
+            { a: { 0: 'b', 1: null, 2: 'c', 3: '' } },
             'with arrayLimit 0 + array brackets: null then empty string works'
         );
 
@@ -249,7 +249,7 @@ test('parse()', function (t) {
         );
         st.deepEqual(
             qs.parse('a[]=b&a[]=&a[]=c&a[]', { strictNullHandling: true, arrayLimit: 0 }),
-            { a: ['b', '', 'c', null] },
+            { a: { 0: 'b', 1: '', 2: 'c', 3: null } },
             'with arrayLimit 0 + array brackets: empty string then null works'
         );
 
@@ -825,6 +825,165 @@ test('parse()', function (t) {
         };
 
         st.deepEqual(qs.parse('KeY=vAlUe', { decoder: decoder }), { key: 'VALUE' });
+        st.end();
+    });
+
+    t.end();
+});
+
+test('DOS', function (t) {
+    var arr = [];
+    for (var i = 0; i < 105; i++) {
+        arr[arr.length] = 'x';
+    }
+
+    var attack = 'a[]=' + arr.join('&a[]=');
+    var result = qs.parse(attack, { arrayLimit: 100 });
+
+    t.notOk(Array.isArray(result.a), 'arrayLimit is respected: result is an object, not an array');
+    t.equal(Object.keys(result.a).length, 105, 'all values are preserved');
+
+    var duplicateAttack = 'a=' + arr.join('&a=');
+    var duplicateResult = qs.parse(duplicateAttack, { arrayLimit: 100 });
+
+    t.notOk(Array.isArray(duplicateResult.a), 'arrayLimit is respected when combining duplicate keys');
+    t.equal(Object.keys(duplicateResult.a).length, 105, 'all duplicate key values are preserved');
+
+    t.end();
+});
+
+test('arrayLimit boundary conditions', function (t) {
+    // arrayLimit is about the max index, not the length; with arrayLimit 3, indices 0-3 are allowed (4 elements)
+    t.test('exactly at the limit stays as array', function (st) {
+        // 4 elements (indices 0-3), max index 3 = limit 3
+        var result = qs.parse('a[]=1&a[]=2&a[]=3&a[]=4', { arrayLimit: 3 });
+        st.ok(Array.isArray(result.a), 'result is an array when max index equals limit');
+        st.deepEqual(result.a, ['1', '2', '3', '4'], 'all values present');
+        st.end();
+    });
+
+    t.test('one over the limit converts to object', function (st) {
+        // 5 elements (indices 0-4), max index 4 > limit 3
+        var result = qs.parse('a[]=1&a[]=2&a[]=3&a[]=4&a[]=5', { arrayLimit: 3 });
+        st.notOk(Array.isArray(result.a), 'result is not an array when over limit');
+        st.deepEqual(result.a, { 0: '1', 1: '2', 2: '3', 3: '4', 4: '5' }, 'all values preserved as object');
+        st.end();
+    });
+
+    t.test('arrayLimit 1 with two values', function (st) {
+        // 2 elements (indices 0-1), max index 1 = limit 1
+        var result = qs.parse('a[]=1&a[]=2', { arrayLimit: 1 });
+        st.ok(Array.isArray(result.a), 'result is an array when max index equals limit');
+        st.deepEqual(result.a, ['1', '2'], 'both values preserved as array');
+        st.end();
+    });
+
+    t.test('arrayLimit 1 with three values converts to object', function (st) {
+        // 3 elements (indices 0-2), max index 2 > limit 1
+        var result = qs.parse('a[]=1&a[]=2&a[]=3', { arrayLimit: 1 });
+        st.notOk(Array.isArray(result.a), 'result is not an array');
+        st.deepEqual(result.a, { 0: '1', 1: '2', 2: '3' }, 'all values preserved as object');
+        st.end();
+    });
+
+    t.test('the overflow bookkeeping is not observable', function (st) {
+        var result = qs.parse('a[]=1&a[]=2&a[]=3', { arrayLimit: 1 });
+        st.deepEqual(Object.keys(result.a), ['0', '1', '2'], 'only the numeric indices are enumerable');
+        st.equal(JSON.stringify(result.a), '{"0":"1","1":"2","2":"3"}', 'JSON output carries no bookkeeping key');
+        st.equal(qs.stringify(result), 'a%5B0%5D=1&a%5B1%5D=2&a%5B2%5D=3', 'stringify carries no bookkeeping key');
+        st.end();
+    });
+
+    t.test('plainObjects overflow objects have a null prototype', function (st) {
+        var result = qs.parse('a[]=1&a[]=2&a[]=3', { arrayLimit: 1, plainObjects: true });
+        var expected = Object.create(null);
+        expected[0] = '1';
+        expected[1] = '2';
+        expected[2] = '3';
+        st.deepEqual(result.a, expected, 'all values preserved as object');
+        st.equal(Object.getPrototypeOf(result.a), null, 'overflow object has a null prototype');
+        st.end();
+    });
+
+    t.end();
+});
+
+test('mixed array and object notation', function (t) {
+    t.test('array brackets with object key - under limit', function (st) {
+        st.deepEqual(
+            qs.parse('a[]=b&a[c]=d'),
+            { a: { 0: 'b', c: 'd' } },
+            'mixing [] and [key] converts to object'
+        );
+        st.end();
+    });
+
+    t.test('array index with object key - under limit', function (st) {
+        st.deepEqual(
+            qs.parse('a[0]=b&a[c]=d'),
+            { a: { 0: 'b', c: 'd' } },
+            'mixing [0] and [key] produces object'
+        );
+        st.end();
+    });
+
+    t.test('plain value with array brackets - under limit', function (st) {
+        st.deepEqual(
+            qs.parse('a=b&a[]=c', { arrayLimit: 20 }),
+            { a: ['b', 'c'] },
+            'plain value combined with [] stays as array under limit'
+        );
+        st.end();
+    });
+
+    t.test('array brackets with plain value - under limit', function (st) {
+        st.deepEqual(
+            qs.parse('a[]=b&a=c', { arrayLimit: 20 }),
+            { a: ['b', 'c'] },
+            '[] combined with plain value stays as array under limit'
+        );
+        st.end();
+    });
+
+    t.test('plain value with array index - under limit', function (st) {
+        st.deepEqual(
+            qs.parse('a=b&a[0]=c', { arrayLimit: 20 }),
+            { a: ['b', 'c'] },
+            'plain value combined with [0] stays as array under limit'
+        );
+        st.end();
+    });
+
+    t.test('multiple plain values with duplicates combine', function (st) {
+        st.deepEqual(
+            qs.parse('a=b&a=c&a=d', { arrayLimit: 20 }),
+            { a: ['b', 'c', 'd'] },
+            'duplicate plain keys combine into array'
+        );
+        st.end();
+    });
+
+    t.test('multiple plain values exceeding limit', function (st) {
+        // 3 elements (indices 0-2), max index 2 > limit 1
+        st.deepEqual(
+            qs.parse('a=b&a=c&a=d', { arrayLimit: 1 }),
+            { a: { 0: 'b', 1: 'c', 2: 'd' } },
+            'duplicate plain keys convert to object when exceeding limit'
+        );
+        st.end();
+    });
+
+    t.test('plain value merged into an overflowing array', function (st) {
+        var result = qs.parse('a[]=b&a[]=c&a=d', { arrayLimit: 1 });
+        st.notOk(Array.isArray(result.a), 'result is not an array when the merge exceeds the limit');
+        st.deepEqual(result.a, { 0: 'b', 1: 'c', 2: 'd' }, 'all values preserved as object');
+        st.end();
+    });
+
+    t.test('overflowing array merged into a plain value', function (st) {
+        var result = qs.parse('a=b&a[]=c&a[]=d', { arrayLimit: 1 });
+        st.notOk(Array.isArray(result.a), 'result is not an array when the merge exceeds the limit');
+        st.deepEqual(result.a, { 0: 'b', 1: 'c', 2: 'd' }, 'all values preserved as object');
         st.end();
     });
 

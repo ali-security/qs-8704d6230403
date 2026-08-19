@@ -52,6 +52,86 @@ test('merge()', function (t) {
         }
     );
 
+    t.test('with overflow objects (from arrayLimit)', function (st) {
+        // arrayLimit is the max index, so with limit 0, max index 0 is allowed (1 element)
+        // To create overflow, 2+ elements are needed with limit 0, or 3+ with limit 1, etc.
+        st.test('merges primitive into overflow object at next index', function (s2t) {
+            // Create an overflow object via combine: 3 elements (indices 0-2) with limit 0
+            var overflow = utils.combine(['a', 'b'], 'c', 0, false);
+            s2t.ok(utils.isOverflow(overflow), 'overflow object is marked');
+            var merged = utils.merge(overflow, 'd');
+            s2t.deepEqual(merged, { 0: 'a', 1: 'b', 2: 'c', 3: 'd' }, 'adds primitive at next numeric index');
+            s2t.end();
+        });
+
+        st.test('merges primitive into regular object with numeric keys normally', function (s2t) {
+            var obj = { 0: 'a', 1: 'b' };
+            s2t.notOk(utils.isOverflow(obj), 'plain object is not marked as overflow');
+            var merged = utils.merge(obj, 'c');
+            s2t.deepEqual(merged, { 0: 'a', 1: 'b', c: true }, 'adds primitive as key (not at next index)');
+            s2t.end();
+        });
+
+        st.test('merges primitive into object with non-numeric keys normally', function (s2t) {
+            var obj = { foo: 'bar' };
+            var merged = utils.merge(obj, 'baz');
+            s2t.deepEqual(merged, { foo: 'bar', baz: true }, 'adds primitive as key with value true');
+            s2t.end();
+        });
+
+        st.test('merges overflow object into primitive', function (s2t) {
+            // Create an overflow object via combine: 2 elements (indices 0-1) with limit 0
+            var overflow = utils.combine(['a'], 'b', 0, false);
+            s2t.ok(utils.isOverflow(overflow), 'overflow object is marked');
+            var merged = utils.merge('c', overflow);
+            s2t.ok(utils.isOverflow(merged), 'result is also marked as overflow');
+            s2t.deepEqual(merged, { 0: 'c', 1: 'a', 2: 'b' }, 'creates object with primitive at 0, source values shifted');
+            s2t.end();
+        });
+
+        st.test('merges overflow object with multiple values into primitive', function (s2t) {
+            // Create an overflow object via combine: 3 elements (indices 0-2) with limit 0
+            var overflow = utils.combine(['b', 'c'], 'd', 0, false);
+            s2t.ok(utils.isOverflow(overflow), 'overflow object is marked');
+            var merged = utils.merge('a', overflow);
+            s2t.deepEqual(merged, { 0: 'a', 1: 'b', 2: 'c', 3: 'd' }, 'shifts all source indices by 1');
+            s2t.end();
+        });
+
+        st.test('merges regular object into primitive as array', function (s2t) {
+            var obj = { foo: 'bar' };
+            var merged = utils.merge('a', obj);
+            s2t.deepEqual(merged, ['a', { foo: 'bar' }], 'creates array with primitive and object');
+            s2t.end();
+        });
+
+        st.test('enforces arrayLimit when appending a primitive to an array', function (s2t) {
+            var merged = utils.merge(['a', 'b'], 'c', { arrayLimit: 1 });
+            s2t.ok(utils.isOverflow(merged), 'result is marked as overflow');
+            s2t.notOk(Array.isArray(merged), 'result is not an array');
+            s2t.deepEqual(merged, { 0: 'a', 1: 'b', 2: 'c' }, 'all values preserved as object');
+
+            var stillAnArray = utils.merge(['a'], 'b', { arrayLimit: 1 });
+            s2t.ok(Array.isArray(stillAnArray), 'stays an array while the max index is within the limit');
+            s2t.deepEqual(stillAnArray, ['a', 'b'], 'all values preserved as array');
+            s2t.end();
+        });
+
+        st.test('enforces arrayLimit when merging an array into a primitive', function (s2t) {
+            var merged = utils.merge('a', ['b', 'c'], { arrayLimit: 1 });
+            s2t.ok(utils.isOverflow(merged), 'result is marked as overflow');
+            s2t.notOk(Array.isArray(merged), 'result is not an array');
+            s2t.deepEqual(merged, { 0: 'a', 1: 'b', 2: 'c' }, 'all values preserved as object');
+
+            var stillAnArray = utils.merge('a', ['b'], { arrayLimit: 1 });
+            s2t.ok(Array.isArray(stillAnArray), 'stays an array while the max index is within the limit');
+            s2t.deepEqual(stillAnArray, ['a', 'b'], 'all values preserved as array');
+            s2t.end();
+        });
+
+        st.end();
+    });
+
     t.end();
 });
 
@@ -112,6 +192,88 @@ test('combine()', function (t) {
         st.notEqual(1, combined, '1 + 2 !== 1');
         st.notEqual(2, combined, '1 + 2 !== 2');
         st.deepEqual([1, 2], combined, 'both arguments are array-wrapped when not an array');
+
+        st.end();
+    });
+
+    t.test('with arrayLimit', function (st) {
+        // arrayLimit is the max index allowed, so with limit 3, indices 0-3 (4 elements) are allowed
+        st.test('under the limit', function (s2t) {
+            var combined = utils.combine(['a', 'b'], 'c', 10, false);
+            s2t.deepEqual(combined, ['a', 'b', 'c'], 'returns array when under limit');
+            s2t.ok(Array.isArray(combined), 'result is an array');
+            s2t.end();
+        });
+
+        st.test('exactly at the limit stays as array', function (s2t) {
+            // 4 elements (indices 0-3), max index 3 = limit 3
+            var combined = utils.combine(['a', 'b', 'c'], 'd', 3, false);
+            s2t.deepEqual(combined, ['a', 'b', 'c', 'd'], 'stays as array when max index equals limit');
+            s2t.ok(Array.isArray(combined), 'result is an array');
+            s2t.end();
+        });
+
+        st.test('over the limit', function (s2t) {
+            // 5 elements (indices 0-4), max index 4 > limit 3
+            var combined = utils.combine(['a', 'b', 'c', 'd'], 'e', 3, false);
+            s2t.deepEqual(combined, { 0: 'a', 1: 'b', 2: 'c', 3: 'd', 4: 'e' }, 'converts to object when over limit');
+            s2t.notOk(Array.isArray(combined), 'result is not an array');
+            s2t.deepEqual(Object.keys(combined), ['0', '1', '2', '3', '4'], 'the overflow bookkeeping is not enumerable');
+            s2t.end();
+        });
+
+        st.test('with arrayLimit 0', function (s2t) {
+            // 1 element (index 0), max index 0 = limit 0, so it stays an array
+            var combined = utils.combine([], 'a', 0, false);
+            s2t.deepEqual(combined, ['a'], 'stays as array with arrayLimit 0 and single element');
+            s2t.ok(Array.isArray(combined), 'result is an array');
+            s2t.end();
+        });
+
+        st.test('with arrayLimit 0 and two elements converts to object', function (s2t) {
+            // 2 elements (indices 0-1), max index 1 > limit 0
+            var combined = utils.combine(['a'], 'b', 0, false);
+            s2t.deepEqual(combined, { 0: 'a', 1: 'b' }, 'converts to object when max index exceeds limit');
+            s2t.notOk(Array.isArray(combined), 'result is not an array');
+            s2t.end();
+        });
+
+        st.test('with plainObjects option', function (s2t) {
+            // 3 elements (indices 0-2), max index 2 > limit 1
+            var combined = utils.combine(['a', 'b'], 'c', 1, true);
+            var expected = Object.create(null);
+            expected[0] = 'a';
+            expected[1] = 'b';
+            expected[2] = 'c';
+            s2t.deepEqual(combined, expected, 'converts to object with null prototype');
+            s2t.equal(Object.getPrototypeOf(combined), null, 'result has null prototype when plainObjects is true');
+            s2t.end();
+        });
+
+        st.end();
+    });
+
+    t.test('with existing overflow object', function (st) {
+        st.test('adds to existing overflow object at next index', function (s2t) {
+            // Create overflow object first via combine: 3 elements (indices 0-2) with limit 0
+            var overflow = utils.combine(['a', 'b'], 'c', 0, false);
+            s2t.ok(utils.isOverflow(overflow), 'initial object is marked as overflow');
+
+            var combined = utils.combine(overflow, 'd', 10, false);
+            s2t.equal(combined, overflow, 'returns the same object (mutated)');
+            s2t.deepEqual(combined, { 0: 'a', 1: 'b', 2: 'c', 3: 'd' }, 'adds value at next numeric index');
+            s2t.end();
+        });
+
+        st.test('does not treat plain object with numeric keys as overflow', function (s2t) {
+            var plainObj = { 0: 'a', 1: 'b' };
+            s2t.notOk(utils.isOverflow(plainObj), 'plain object is not marked as overflow');
+
+            // combine treats this as a regular value, not an overflow object to append to
+            var combined = utils.combine(plainObj, 'c', 10, false);
+            s2t.deepEqual(combined, [{ 0: 'a', 1: 'b' }, 'c'], 'concatenates as regular values');
+            s2t.end();
+        });
 
         st.end();
     });
